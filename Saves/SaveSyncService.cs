@@ -495,6 +495,7 @@ namespace RomM.Saves
                 Emulator = emulator,
                 Profile = ResolveProfile(game, emulator),
                 ContentPath = _romM.Playnite.ExpandGameVariables(game, contentPath),
+                ConfigPathOverride = Settings.RetroArchConfigPath,
                 Logger = Logger,
             });
         }

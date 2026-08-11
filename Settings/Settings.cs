@@ -247,6 +247,15 @@ namespace RomM.Settings
         // registration and persisted so this machine keeps the same RomM device across sessions.
         public bool EnableSaveSync { get; set; } = false;
         public string SaveSyncDeviceId { get; set; } = "";
+
+        // Where RetroArch's own retroarch.cfg lives, when it cannot be found from the Playnite
+        // emulator entry. Save sync reads that file to learn savefile_directory; without it there
+        // is no way to know where saves belong. Normally the entry's install directory is enough,
+        // but a launcher-script setup points it at the script's folder rather than RetroArch's, and
+        // frontends that generate their Playnite emulators (EmuDeck among them) rewrite that entry
+        // wholesale, so a correction made there does not survive. This setting is plugin-side and
+        // does. Empty means auto-detect.
+        public string RetroArchConfigPath { get; set; } = "";
         public bool Use7z { get; set; } = false;
         public string PathTo7z
         {
@@ -333,6 +342,7 @@ namespace RomM.Settings
                 ExcludeGenres = savedSettings.ExcludeGenres;
                 EnableSaveSync = savedSettings.EnableSaveSync;
                 SaveSyncDeviceId = savedSettings.SaveSyncDeviceId;
+                RetroArchConfigPath = savedSettings.RetroArchConfigPath;
             }
             
             if (Mappings == null)

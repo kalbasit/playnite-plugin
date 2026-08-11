@@ -46,6 +46,15 @@ namespace RomM.Saves
         /// <summary>The ROM's path with Playnite's variables already expanded.</summary>
         public string ContentPath { get; set; }
 
+        /// <summary>
+        /// User-supplied path to the emulator's own configuration file, empty when unset. Takes
+        /// precedence over anything a handler can work out for itself: the Playnite emulator entry
+        /// does not always point at the emulator, and where a frontend generates those entries it
+        /// will overwrite corrections made there, so this is the one place a user can state it and
+        /// have it stay stated.
+        /// </summary>
+        public string ConfigPathOverride { get; set; }
+
         public ILogger Logger { get; set; }
     }
 }

@@ -128,6 +128,15 @@ namespace RomM.Settings
             e.Handled = true;
         }
 
+        private void Click_BrowseRetroArchConfig(object sender, RoutedEventArgs e)
+        {
+            string path;
+            if ((path = SettingsViewModel.Instance.PlayniteAPI.Dialogs.SelectFile("RetroArch config|retroarch.cfg")) == null) return;
+
+            SettingsViewModel.Instance.RetroArchConfigPath = path;
+            e.Handled = true;
+        }
+
         private async void Click_LoginViaQR(object sender, RoutedEventArgs e)
         {
             if (string.IsNullOrEmpty(SettingsViewModel.Instance.RomMHost))

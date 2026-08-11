@@ -324,6 +324,18 @@
                     <CheckBox Style="{StaticResource SettingCheck}" IsChecked="{Binding EnableSaveSync, Mode=TwoWay}">
                         <TextBlock Text="Sync RetroArch saves with RomM (downloads the newest save before launch, uploads after play)" TextWrapping="Wrap" />
                     </CheckBox>
+                    <Grid Margin="0,0,0,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" MinWidth="130" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Label Grid.Column="0" Content="retroarch.cfg" Style="{StaticResource FieldLabel}" Margin="0,0,8,0" />
+                        <TextBox Grid.Column="1" Width="280" HorizontalAlignment="Left" VerticalAlignment="Center" Text="{Binding RetroArchConfigPath, Mode=TwoWay}" />
+                        <Button Grid.Column="2" Content="Browse" Padding="10,2" Margin="8,0,0,0" Click="Click_BrowseRetroArchConfig" />
+                    </Grid>
+                    <TextBlock TextWrapping="Wrap" Margin="0,0,0,8" Opacity="0.75"
+                               Text="Leave empty to detect it automatically. Set it if saves are not syncing and the log reports that retroarch.cfg could not be found -- launcher-script setups point Playnite's emulator entry at the script rather than at RetroArch." />
                 </StackPanel>
             </ScrollViewer>
         </Grid>

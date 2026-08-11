@@ -17,6 +17,24 @@ namespace RomM.Saves
     /// </summary>
     internal sealed class RetroArchSaveHandler : ISaveHandler
     {
+        private readonly string _roamingConfigDir;
+
+        public RetroArchSaveHandler()
+            : this(Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "RetroArch"))
+        {
+        }
+
+        /// <param name="roamingConfigDir">
+        /// Where an installed (non-portable) RetroArch keeps its configuration. Injectable so the
+        /// discovery order can be tested without the result depending on whether the machine
+        /// running the tests happens to have RetroArch installed.
+        /// </param>
+        internal RetroArchSaveHandler(string roamingConfigDir)
+        {
+            _roamingConfigDir = roamingConfigDir;
+        }
+
         public string EmulatorTag => "retroarch";
 
         public bool CanHandle(Emulator emulator)
@@ -45,12 +63,22 @@ namespace RomM.Saves
                 if (string.IsNullOrEmpty(request.ContentPath))
                     return null;
 
-                var cfgPath = FindConfig(request.Emulator);
-                var cfg = cfgPath != null
-                    ? RetroArchConfig.Parse(File.ReadAllText(cfgPath))
-                    : new Dictionary<string, string>();
+                var cfgPath = FindConfig(request.Emulator, request.Profile, request.ConfigPathOverride, out var baseDir);
+                if (cfgPath == null)
+                {
+                    // Without the config there is no way to know where saves go, and guessing is
+                    // worse than stopping: an empty config resolves to the content directory, which
+                    // silently files real save data inside the user's ROM library and reports
+                    // success. "savefile_directory is empty" and "no config was found" look the
+                    // same downstream but mean opposite things, so the second one has to end here.
+                    request.Logger?.Info(
+                        $"[SaveSync] Could not find retroarch.cfg for '{request.Emulator.Name}' " +
+                        $"(install dir: {Describe(request.Emulator.InstallDir)}). Set the retroarch.cfg " +
+                        "path in the RomM settings to sync this game's saves.");
+                    return null;
+                }
 
-                var baseDir = request.Emulator.InstallDir;
+                var cfg = RetroArchConfig.Parse(File.ReadAllText(cfgPath));
                 var saveRoot = RetroArchConfig.ResolveSaveBaseDirectory(cfg, request.ContentPath, baseDir);
 
                 // With sort_savefiles_enable the save sits in a folder named after the running core.
@@ -62,6 +90,19 @@ namespace RomM.Saves
                 var expectedPath = RetroArchConfig.ResolveSaveFilePath(cfg, request.ContentPath, coreName, baseDir);
                 if (string.IsNullOrEmpty(expectedPath))
                     return null;
+
+                // A configured path can still come out relative -- ":\saves" with no base directory
+                // to expand it against leaves "saves". Combining that with a file name yields
+                // something that resolves against Playnite's working directory, which is nobody's
+                // save folder, so it is another case of not knowing rather than a usable answer.
+                if (!Path.IsPathRooted(expectedPath))
+                {
+                    request.Logger?.Info(
+                        $"[SaveSync] Save path for '{request.Emulator.Name}' resolved to the relative " +
+                        $"'{expectedPath}', which cannot be anchored (base directory: " +
+                        $"{Describe(baseDir)}). Set the retroarch.cfg path in the RomM settings.");
+                    return null;
+                }
 
                 // The configured path is where RetroArch *would* write. When nothing is there, the
                 // save may still exist under a subfolder we did not model, so fall back to
@@ -145,19 +186,88 @@ namespace RomM.Saves
             }
         }
 
-        private static string FindConfig(Emulator emulator)
+        /// <summary>
+        /// Locates retroarch.cfg, and reports the directory RetroArch treats as its base -- what
+        /// the leading ':' in values like ":\saves" expands against. The two are the same for a
+        /// portable install, where the config sits beside the executable, but not for an installed
+        /// one, where the config lives under %AppData% while ':' still means the program folder.
+        ///
+        /// Order matters. The Playnite entry's install directory is only correct when the entry
+        /// points at RetroArch itself; a profile that launches through a wrapper script points it
+        /// at the script's folder, and the config is then nowhere near it. So an explicit setting
+        /// wins, then the executable the profile actually runs, and the install directory is
+        /// consulted after both.
+        /// </summary>
+        private string FindConfig(
+            Emulator emulator, EmulatorProfile profile, string overridePath, out string retroArchBaseDir)
         {
+            retroArchBaseDir = emulator.InstallDir;
+
+            if (!string.IsNullOrWhiteSpace(overridePath) && File.Exists(overridePath))
+            {
+                retroArchBaseDir = Path.GetDirectoryName(overridePath);
+                return overridePath;
+            }
+
+            var fromExecutable = ExecutableDirectory(profile);
+            if (fromExecutable != null)
+            {
+                var beside = Path.Combine(fromExecutable, "retroarch.cfg");
+                if (File.Exists(beside))
+                {
+                    retroArchBaseDir = fromExecutable;
+                    return beside;
+                }
+            }
+
             if (!string.IsNullOrEmpty(emulator.InstallDir))
             {
                 var inInstall = Path.Combine(emulator.InstallDir, "retroarch.cfg");
                 if (File.Exists(inInstall))
+                {
+                    retroArchBaseDir = emulator.InstallDir;
                     return inInstall;
+                }
             }
 
-            var appData = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "RetroArch", "retroarch.cfg");
-            return File.Exists(appData) ? appData : null;
+            // The roaming config belongs to an installed RetroArch, whose ':' is the program folder
+            // rather than this one, so the base directory is left as the entry's install directory.
+            if (string.IsNullOrEmpty(_roamingConfigDir))
+                return null;
+
+            var roaming = Path.Combine(_roamingConfigDir, "retroarch.cfg");
+            return File.Exists(roaming) ? roaming : null;
+        }
+
+        /// <summary>
+        /// The folder of the executable a custom profile runs, when that executable is RetroArch
+        /// itself. A profile that launches a wrapper (a script, a shell) is deliberately not
+        /// followed: where it ends up is that script's business and not something to infer.
+        /// </summary>
+        private static string ExecutableDirectory(EmulatorProfile profile)
+        {
+            var custom = profile as CustomEmulatorProfile;
+            if (custom == null || string.IsNullOrWhiteSpace(custom.Executable))
+                return null;
+
+            if (!string.Equals(Path.GetFileName(custom.Executable), "retroarch.exe",
+                    StringComparison.OrdinalIgnoreCase))
+                return null;
+
+            try
+            {
+                var directory = Path.GetDirectoryName(Path.GetFullPath(custom.Executable));
+                return Directory.Exists(directory) ? directory : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static string Describe(string value)
+        {
+            return string.IsNullOrEmpty(value) ? "<not set>" : value;
         }
 
         private static string FindExistingSave(string baseDir, string contentName)
