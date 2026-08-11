@@ -82,8 +82,12 @@ namespace RomM.Saves
                 if (target == null)
                 {
                     outcome.Message = "Save sync does not know where this game's emulator keeps its saves.";
+                    Logger.Info($"[SaveSync] {game.Name} (rom {romId}): {outcome.Message}");
                     return outcome;
                 }
+
+                Logger.Info($"[SaveSync] {game.Name} (rom {romId}): target {target.DescribeLocation()} " +
+                            $"exists={target.Exists} emulator='{target.EmulatorTag}' slot='{target.Slot}'");
 
                 outcome.Applicable = true;
 
@@ -106,7 +110,14 @@ namespace RomM.Saves
                 // Negotiate may surface operations for saves we didn't report (e.g. created on another
                 // device). We only resolved a local path for THIS game, so apply only its operations;
                 // other ROMs are handled when their own games sync.
-                foreach (var op in negotiation.Operations.Where(o => o.RomId == romId))
+                var applicable = negotiation.Operations.Where(o => o.RomId == romId).ToList();
+                if (applicable.Count == 0)
+                {
+                    Logger.Info($"[SaveSync] {game.Name} (rom {romId}): negotiate returned nothing for this ROM, " +
+                                "so there is nothing to apply.");
+                }
+
+                foreach (var op in applicable)
                 {
                     ApplyOperation(op, deviceId, negotiation.SessionId, target, outcome);
                 }
@@ -124,8 +135,39 @@ namespace RomM.Saves
                 outcome.Failed++;
                 outcome.Message = ex.Message;
             }
+            finally
+            {
+                // In a finally because the failures most worth reporting -- device registration and
+                // negotiate -- return early rather than falling through to the end of the method.
+                NotifyIfUnhealthy(game, outcome);
+            }
 
             return outcome;
+        }
+
+        /// <summary>
+        /// Puts a failed sync in front of the player. Save sync fails silently by nature: the game
+        /// still launches, and a save that did not arrive looks exactly like a game that was never
+        /// played on the other device, so the first evidence of trouble is usually lost progress.
+        /// The diagnosis is already in <see cref="SyncOutcome.Message"/> at that point, and the
+        /// only thing missing is showing it. Successful syncs stay quiet.
+        /// </summary>
+        private void NotifyIfUnhealthy(Game game, SyncOutcome outcome)
+        {
+            if (outcome.Failed == 0 || string.IsNullOrEmpty(outcome.Message))
+                return;
+
+            try
+            {
+                _romM.Playnite.Notifications.Add(
+                    $"romm-savesync-{game?.Id}",
+                    $"RomM save sync failed for \"{game?.Name}\": {outcome.Message}",
+                    NotificationType.Error);
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"[SaveSync] Could not surface the sync failure notification: {ex.Message}");
+            }
         }
 
         #region Negotiate / session
@@ -136,7 +178,7 @@ namespace RomM.Saves
 
             if (target.Exists)
             {
-                payload.Saves.Add(new RomMClientSaveState
+                var reported = new RomMClientSaveState
                 {
                     RomId = romId,
                     FileName = target.FileName,
@@ -145,12 +187,58 @@ namespace RomM.Saves
                     ContentHash = target.ContentHash(),
                     UpdatedAt = target.UpdatedAtUtc,
                     FileSizeBytes = target.SizeBytes,
-                });
+                };
+
+                payload.Saves.Add(reported);
+
+                Logger.Info($"[SaveSync] negotiate rom {romId}: reporting local save " +
+                            $"'{reported.FileName}' slot='{reported.Slot}' emulator='{reported.Emulator}' " +
+                            $"hash={reported.ContentHash} updatedAtUtc={reported.UpdatedAt:o} " +
+                            $"bytes={reported.FileSizeBytes} from {target.DescribeLocation()}");
+            }
+            else
+            {
+                // An absent local save is reported as an empty list, which the server reads as
+                // "this device no longer has it". That is indistinguishable from a deliberate
+                // deletion, so it matters a great deal whether we got here because there really
+                // is no save or because we resolved the wrong path.
+                Logger.Info($"[SaveSync] negotiate rom {romId}: NO local save reported; " +
+                            $"nothing found at {target.DescribeLocation()}");
             }
 
             var url = RomMUrl.Combine(Settings.RomMHost, "api/sync/negotiate");
             var body = PostJson(url, payload);
-            return body == null ? null : JsonConvert.DeserializeObject<RomMSyncNegotiateResponse>(body);
+            if (body == null)
+            {
+                Logger.Warn($"[SaveSync] negotiate rom {romId}: no response body from {url}.");
+                return null;
+            }
+
+            var response = JsonConvert.DeserializeObject<RomMSyncNegotiateResponse>(body);
+            if (response == null)
+            {
+                Logger.Warn($"[SaveSync] negotiate rom {romId}: response did not deserialise.");
+                return null;
+            }
+
+            var operations = response.Operations ?? new List<RomMSyncOperation>();
+            Logger.Info($"[SaveSync] negotiate rom {romId}: device={deviceId} session={response.SessionId} " +
+                        $"returned {operations.Count} operation(s) " +
+                        $"(upload={response.TotalUpload} download={response.TotalDownload} " +
+                        $"conflict={response.TotalConflict} no_op={response.TotalNoOp})");
+
+            // Every operation, not just this ROM's: an operation that arrives for a different
+            // rom_id than the one we asked about is silently discarded by the caller's filter,
+            // and that is invisible unless it is logged here.
+            foreach (var op in operations)
+            {
+                Logger.Info($"[SaveSync]   op rom={op.RomId} action='{op.Action}' save={op.SaveId} " +
+                            $"file='{op.FileName}' slot='{op.Slot}' " +
+                            $"serverUpdatedAt={op.ServerUpdatedAt:o} serverHash={op.ServerContentHash} " +
+                            $"reason=\"{op.Reason}\"");
+            }
+
+            return response;
         }
 
         private void CompleteSession(int sessionId, int completed, int failed)

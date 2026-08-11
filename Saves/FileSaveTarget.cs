@@ -46,6 +46,13 @@ namespace RomM.Saves
             return new PreparedUpload(_readPath, Path.GetFileName(_readPath), isTemporary: false);
         }
 
+        public override string DescribeLocation()
+        {
+            return string.Equals(_readPath, _writePath, StringComparison.OrdinalIgnoreCase)
+                ? _readPath
+                : $"{_readPath} (configured path: {_writePath})";
+        }
+
         public override void ApplyDownload(byte[] payload, DateTime? serverUpdatedAtUtc)
         {
             var destination = File.Exists(_readPath) ? _readPath : _writePath;

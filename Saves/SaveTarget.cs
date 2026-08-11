@@ -60,6 +60,15 @@ namespace RomM.Saves
         /// in sync rather than as a fresh local edit.
         /// </summary>
         public abstract void ApplyDownload(byte[] payload, DateTime? serverUpdatedAtUtc);
+
+        /// <summary>
+        /// Where this save was looked for, for diagnostics only. A sync that does nothing is
+        /// nearly always a disagreement about the path: the emulator writes one file and the
+        /// client inspects another, and both sides look healthy in isolation. Naming the file
+        /// actually examined turns that from a guess into a one-line answer, so this is worth
+        /// carrying even though nothing in the sync logic reads it.
+        /// </summary>
+        public virtual string DescribeLocation() => FileName;
     }
 
     /// <summary>
