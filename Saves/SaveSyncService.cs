@@ -78,11 +78,12 @@ namespace RomM.Saves
                     return outcome;
                 }
 
-                var target = ResolveTarget(game);
+                var target = ResolveTarget(game, outcome);
                 if (target == null)
                 {
-                    outcome.Message = "Save sync does not know where this game's emulator keeps its saves.";
-                    Logger.Info($"[SaveSync] {game.Name} (rom {romId}): {outcome.Message}");
+                    if (!string.IsNullOrEmpty(outcome.Message))
+                        Logger.Info($"[SaveSync] {game.Name} (rom {romId}): {outcome.Message}");
+
                     return outcome;
                 }
 
@@ -151,10 +152,14 @@ namespace RomM.Saves
         /// played on the other device, so the first evidence of trouble is usually lost progress.
         /// The diagnosis is already in <see cref="SyncOutcome.Message"/> at that point, and the
         /// only thing missing is showing it. Successful syncs stay quiet.
+        ///
+        /// Keyed on the message rather than on the failed-operation count, because the failure that
+        /// most needs saying -- not knowing where the save lives -- happens before any operation is
+        /// attempted, so nothing has failed yet by that measure and nothing would be shown.
         /// </summary>
         private void NotifyIfUnhealthy(Game game, SyncOutcome outcome)
         {
-            if (outcome.Failed == 0 || string.IsNullOrEmpty(outcome.Message))
+            if (string.IsNullOrEmpty(outcome.Message))
                 return;
 
             try
@@ -471,8 +476,13 @@ namespace RomM.Saves
         /// Finds the emulator Playnite launches this game with, hands it to whichever handler
         /// recognises it, and lets that handler locate the save. Null when the game has no
         /// emulator, no ROM path, or runs on an emulator no handler covers yet.
+        ///
+        /// Sets <see cref="SyncOutcome.Message"/> only when a handler recognised the emulator and
+        /// still could not locate the save, which is a setup problem the player can fix. A game on
+        /// an emulator no handler covers is not a problem at all -- most libraries have some -- and
+        /// saying so on every launch would train people to ignore the one message that matters.
         /// </summary>
-        private SaveTarget ResolveTarget(Game game)
+        private SaveTarget ResolveTarget(Game game, SyncOutcome outcome)
         {
             var contentPath = game.Roms?.FirstOrDefault()?.Path;
             if (string.IsNullOrEmpty(contentPath))
@@ -489,7 +499,20 @@ namespace RomM.Saves
                 return null;
             }
 
-            return handler.ResolveTarget(new SaveTargetRequest
+            var target = handler.ResolveTarget(BuildRequest(game, emulator, contentPath));
+            if (target == null)
+            {
+                outcome.Message =
+                    $"Save sync could not work out where {emulator.Name} keeps this game's saves. " +
+                    "See the RomM extension log for the reason.";
+            }
+
+            return target;
+        }
+
+        private SaveTargetRequest BuildRequest(Game game, Emulator emulator, string contentPath)
+        {
+            return new SaveTargetRequest
             {
                 Game = game,
                 Emulator = emulator,
@@ -497,7 +520,7 @@ namespace RomM.Saves
                 ContentPath = _romM.Playnite.ExpandGameVariables(game, contentPath),
                 ConfigPathOverride = Settings.RetroArchConfigPath,
                 Logger = Logger,
-            });
+            };
         }
 
         private Emulator ResolveEmulator(Game game)
